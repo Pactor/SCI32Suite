@@ -5,6 +5,7 @@ using SCI32Suite.V56;
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace SCI32Suite
@@ -28,8 +29,12 @@ namespace SCI32Suite
         private PaletteData _bottom;
 
         // --- View tab controls ---
-        private TrackBar _loopSlider;
-        private TrackBar _cellSlider;
+        //private TrackBar _loopSlider;
+        private NumberedTrackBar _loopSlider;
+        Label _loopsNumLabel;
+        Label _loopsTotalLabel;
+        FlowLayoutPanel _loopSliderPanel;
+        private NumberedTrackBar _cellSlider;
         private Panel _keyColorPanel;
         private PaletteControl _miniPalette;
         private PictureBox _viewPictureBox;
@@ -50,12 +55,14 @@ namespace SCI32Suite
 
         private bool _fillImage = true;
 
-        public MainForm()
+        private TabPage _viewTab;
+        private TabPage _paletteTab;
+        public MainForm(string startupFile)
         {
             Text = "SCI32PaletteConvertor";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1000, 720);
-            MinimumSize = new Size(900, 600);
+            ClientSize = new Size(900,620);
+            MinimumSize = new Size(800, 500);
 
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(CreateViewTab());
@@ -63,7 +70,20 @@ namespace SCI32Suite
             tabs.TabPages.Add(CreatePaletteTab());
 
             Controls.Add(tabs);
-
+            if (!string.IsNullOrEmpty(startupFile))
+            {
+                string ext = Path.GetExtension(startupFile).ToLowerInvariant();
+                if (ext == ".sci32")
+                {
+                    tabs.SelectedTab = _viewTab;
+                    // TODO: LoadProject(startupFile);
+                }
+                else if (ext == ".scpal")
+                {
+                    tabs.SelectedTab = _paletteTab;
+                    // TODO: LoadPalette(startupFile);
+                }
+            }
             // initialise palette data
             _top = PaletteData.CreateDefault();
             _bottom = PaletteData.CreateDefault();
@@ -121,9 +141,6 @@ namespace SCI32Suite
             page.Controls.Add(layout);
             return page;
         }
-
-       
-
         private TabPage CreateViewTab()
         {
             // ----------------------------
@@ -152,33 +169,51 @@ namespace SCI32Suite
             leftPanel.Controls.Add(buttonStack);
 
             // ----------------------------
-            // Controls inside right-side left 30%
+            // Sliders
             // ----------------------------
-            _loopSlider = new TrackBar
+            _loopSlider = new NumberedTrackBar
             {
                 Minimum = 0,
                 Maximum = 10,
-                TickStyle = TickStyle.BottomRight,
-                Dock = DockStyle.Top,
-                Margin = new Padding(0, 2, 0, 2)   // smaller vertical gaps
+                TickFrequency = 1,
+                RightText = "10",
+                FixedWidth = 180
             };
 
-            _cellSlider = new TrackBar
+            _loopsTotalLabel = new Label
+            {
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(4, 0, 0, 0)
+            };
+
+            _loopSliderPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true
+            };
+            _loopSliderPanel.Controls.Add(_loopSlider);
+            _loopSliderPanel.Controls.Add(_loopsTotalLabel);
+
+            _cellSlider = new NumberedTrackBar
             {
                 Minimum = 0,
                 Maximum = 10,
-                TickStyle = TickStyle.BottomRight,
-                Dock = DockStyle.Top,
-                Margin = new Padding(0, 2, 0, 2)
+                TickFrequency = 1,
+                RightText = "10",
+                FixedWidth = 180
             };
 
+            // ----------------------------
+            // Key color panel and palette
+            // ----------------------------
             _keyColorPanel = new Panel
             {
                 BorderStyle = BorderStyle.FixedSingle,
                 BackColor = Color.White,
                 Height = 24,
                 Width = 80,
-                Margin = new Padding(0, 4, 0, 6),  // slightly closer to mini palette
+                Margin = new Padding(0, 4, 0, 6),
                 Anchor = AnchorStyles.None
             };
 
@@ -186,11 +221,49 @@ namespace SCI32Suite
             {
                 Width = 150,
                 Height = 150,
-                Margin = new Padding(0, 2, 0, 0),  // minimal top margin
+                Margin = new Padding(0, 2, 0, 0),
                 Anchor = AnchorStyles.None
             };
 
-            // Stack sliders → key color → mini palette tightly
+            // ============================
+            // Key + Palette layout block
+            // ============================
+            var keyPaletteStack = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                ColumnCount = 2,
+                Padding = new Padding(6)
+            };
+            keyPaletteStack.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); // Key label
+            keyPaletteStack.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); // key panel
+
+            // Key row
+            Label keyLabel = new Label
+            {
+                Text = "Key",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 0, 6, 0)
+            };
+            keyPaletteStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            keyPaletteStack.Controls.Add(keyLabel, 0, 0);
+            keyPaletteStack.Controls.Add(_keyColorPanel, 1, 0);
+
+            // Spacer row (adjust Height to move palette further down)
+            Panel spacer = new Panel { Height = 255 };   // increase/decrease as needed
+            keyPaletteStack.RowStyles.Add(new RowStyle(SizeType.Absolute, spacer.Height));
+            keyPaletteStack.Controls.Add(spacer, 0, 1);
+            keyPaletteStack.SetColumnSpan(spacer, 2);
+
+            // Palette row
+            keyPaletteStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            keyPaletteStack.Controls.Add(_miniPalette, 0, 2);
+            keyPaletteStack.SetColumnSpan(_miniPalette, 2);
+
+            // ----------------------------
+            // Overall control stack
+            // ----------------------------
             var controlStack = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
@@ -198,22 +271,18 @@ namespace SCI32Suite
                 ColumnCount = 1,
                 Padding = new Padding(6)
             };
-            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            controlStack.Controls.Add(_loopSlider, 0, 0);
+            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // loop slider
+            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // cell slider
+            controlStack.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // key + palette block
+            controlStack.Controls.Add(_loopSliderPanel, 0, 0);
             controlStack.Controls.Add(_cellSlider, 0, 1);
-            controlStack.Controls.Add(_keyColorPanel, 0, 2);
-            controlStack.Controls.Add(_miniPalette, 0, 3);
+            controlStack.Controls.Add(keyPaletteStack, 0, 2);
 
-            // Panel keeps stack at natural height and centers it vertically
             var controlPanel = new Panel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true
             };
-            controlStack.Anchor = AnchorStyles.Top;
             controlPanel.Controls.Add(controlStack);
 
             // ----------------------------
@@ -229,11 +298,10 @@ namespace SCI32Suite
             var rightPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1
+                ColumnCount = 2
             };
-            rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30)); // controls
-            rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70)); // picture
+            rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
             rightPanel.Controls.Add(controlPanel, 0, 0);
             rightPanel.Controls.Add(_viewPictureBox, 1, 0);
 
@@ -243,20 +311,17 @@ namespace SCI32Suite
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1
+                ColumnCount = 2
             };
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260f));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             mainLayout.Controls.Add(leftPanel, 0, 0);
             mainLayout.Controls.Add(rightPanel, 1, 0);
 
-            var page = new TabPage("View");
-            page.Controls.Add(mainLayout);
-            return page;
+            _viewTab = new TabPage("View");
+            _viewTab.Controls.Add(mainLayout);
+            return _viewTab;
         }
-
-
         private TabPage CreatePaletteTab()
         {
             _lblTop = new Label
@@ -308,11 +373,11 @@ namespace SCI32Suite
             };
             buttonStack.Controls.AddRange(new Control[]
             {
-        _btnLoadRiff,
-        _btnExtractFromImage,
-        _btnLoadSci32,
-        _btnExportTopRiff,
-        _btnExportBottomSci32
+                _btnLoadRiff,
+                _btnExtractFromImage,
+                _btnLoadSci32,
+                _btnExportTopRiff,
+                _btnExportBottomSci32
             });
             _lblStatus.Dock = DockStyle.Bottom;
             leftPanel.Controls.Add(buttonStack);
@@ -354,9 +419,9 @@ namespace SCI32Suite
             layout.Controls.Add(leftPanel, 0, 0);
             layout.Controls.Add(rightLayout, 1, 0);
 
-            var page = new TabPage("Palette");
-            page.Controls.Add(layout);
-            return page;
+            _paletteTab = new TabPage("Palette");
+            _paletteTab.Controls.Add(layout);
+            return _paletteTab;
         }
 
 
@@ -367,7 +432,8 @@ namespace SCI32Suite
             _topPalette.Invalidate();
             _bottomPalette.Invalidate();
         }
-
+        // helper to refresh tick numbers and total label
+      
         private void OnLoadRiff(object sender, EventArgs e)
         {
             using (var ofd = new OpenFileDialog())

@@ -13,7 +13,7 @@
 
 # TODO (Wishlist)
 
-- **V56 Eiditing and Creation.
+- **V56 Editing and Creation.
 
 - **Sierra Online Room Creator.
 

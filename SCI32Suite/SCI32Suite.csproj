@@ -46,12 +46,19 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Controls\NumberedTrackBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Controls\NumberedTrackBar.Designer.cs">
+      <DependentUpon>NumberedTrackBar.cs</DependentUpon>
+    </Compile>
     <Compile Include="Controls\PaletteControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Controls\PaletteControl.Designer.cs">
       <DependentUpon>PaletteControl.cs</DependentUpon>
     </Compile>
+    <Compile Include="Global.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
