@@ -11,3 +11,12 @@
   - Extract the palette and convert it to **RIFF** format.
   - Convert palettes **between RIFF and SCI32** formats.
 
+# TODO (Wishlist)
+
+- **V56 Eiditing and Creation.
+
+- **Sierra Online Room Creator.
+
+- **Sierra Online NPC Creator.
+
+- **Sierra Online Object Reader/Writer
