@@ -166,6 +166,10 @@ namespace SCI32Suite
                 _btnCreateProject,
                 _btnPlay
             });
+            _btnLoadProject.Click += _btnLoadProject_Click;
+            _btnCreateProject.Click += _btnCreateProject_Click;
+            _btnPlay.Click += _btnPlay_Click;
+
             leftPanel.Controls.Add(buttonStack);
 
             // ----------------------------
@@ -322,6 +326,29 @@ namespace SCI32Suite
             _viewTab.Controls.Add(mainLayout);
             return _viewTab;
         }
+
+        private void _btnPlay_Click(object sender, EventArgs e)
+        {
+            
+        }
+
+        private void _btnCreateProject_Click(object sender, EventArgs e)
+        {
+            
+        }
+
+        private void _btnLoadProject_Click(object sender, EventArgs e)
+        {
+            // load a v56 for now
+            using (var ofd = new OpenFileDialog())
+            {
+                ofd.Filter = "V56 View (*.v56)|*.v56|All Files (*.*)|*.*";
+                if (ofd.ShowDialog(this) == DialogResult.OK)
+                {
+                }
+            }
+        }
+
         private TabPage CreatePaletteTab()
         {
             _lblTop = new Label
@@ -705,7 +732,7 @@ namespace SCI32Suite
 
                 try
                 {
-                    P56File.SaveImageAsV56(_p56PictureBox.Image, sfd.FileName, false);
+                    P56File.SaveImageAsP56(_p56PictureBox.Image, sfd.FileName, false);
                     MessageBox.Show(this, "P56 saved successfully.", "Export P56",
                                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }

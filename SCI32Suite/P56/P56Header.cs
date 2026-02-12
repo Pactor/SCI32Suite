@@ -79,8 +79,8 @@ namespace SCI32Suite.P56
         {
             public ushort Width;
             public ushort Height;
-            public ushort XShift;
-            public ushort YShift;
+            public short XShift;
+            public short YShift;
             public byte Transparent;
             public byte Compression;
             public ushort Flags;
