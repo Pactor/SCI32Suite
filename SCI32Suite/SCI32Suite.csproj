@@ -74,6 +74,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Utils\BinaryUtil.cs" />
+    <Compile Include="V56\V56Codec.cs" />
+    <Compile Include="V56\V56FIle.cs" />
     <Compile Include="V56\V56PaletteExtractor.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>

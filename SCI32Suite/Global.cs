@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,6 +13,7 @@ namespace SCI32Suite
 {
     public static class Global
     {
+        public static string BaseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         public static void EnsureFileAssociations()
         {
             string exePath = Application.ExecutablePath;
