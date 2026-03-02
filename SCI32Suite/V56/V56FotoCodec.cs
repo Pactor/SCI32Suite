@@ -26,11 +26,22 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
+using System.Windows.Forms;
 
 public static class V56Encoder
 {
-    private const ushort VIEW_HEADER_SIZE = 0x0012; // 18 bytes after the u16 size field
+    private const ushort VIEW_HEADER_SIZE_A = 0x0012; // 18 bytes after the u16 size field (Variant A)
+    private const ushort VIEW_HEADER_SIZE_B = 0x0010; // 16 bytes after the u16 size field (Variant B)
     private const ushort LOOP_HEADER_SIZE = 0x0010; // 16
+
+
+    private static ushort GetViewHeaderSize(V56EncodeOptions opt)
+    {
+        if (opt == null) return VIEW_HEADER_SIZE_A;
+        return (opt.HeaderVariant == V56ViewHeaderVariant.B_0x10_No0084) ? VIEW_HEADER_SIZE_B : VIEW_HEADER_SIZE_A;
+    }
+
     private const ushort CEL_HEADER_SIZE = 0x0034; // 52
 
     private const byte TRANSPARENT_INDEX = 255;
@@ -42,6 +53,16 @@ public static class V56Encoder
         public short DefaultXHot = 0;
         public short DefaultYHot = 0;
 
+        public V56ImageLoop AddImageLoop(Image bmp)
+        {
+            Bitmap b = bmp as Bitmap;
+            return AddImageLoop(b);
+        }
+        public V56ImageLoop AddImageLoop(Image bmp, short xHot, short yHot)
+        {
+            Bitmap b = bmp as Bitmap;
+            return AddImageLoop(b, xHot, yHot);
+        }
         public V56ImageLoop AddImageLoop(Bitmap bmp)
         {
             if (bmp == null) throw new ArgumentNullException("bmp");
@@ -53,7 +74,7 @@ public static class V56Encoder
         public V56ImageLoop AddImageLoop(Bitmap bmp, short xHot, short yHot)
         {
             if (bmp == null) throw new ArgumentNullException("bmp");
-            
+
             V56ImageLoop l = new V56ImageLoop(bmp, xHot, yHot);
             Loops.Add(l);
             return l;
@@ -74,7 +95,6 @@ public static class V56Encoder
         public int MirrorOf;
         public V56MirrorLoop(int mirrorOf) { MirrorOf = mirrorOf; }
     }
-
     public sealed class V56ImageLoop : V56LoopDef
     {
         public int Width;
@@ -95,19 +115,369 @@ public static class V56Encoder
             Indices = null;
         }
     }
-
+    public static Bitmap RgbaToBitmap(V56Encoder.V56ImageLoop img)
+    {
+        Bitmap bmp = new Bitmap(img.Width, img.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var rect = new Rectangle(0, 0, img.Width, img.Height);
+        var bd = bmp.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly, bmp.PixelFormat);
+        try
+        {
+            // img.Rgba is int[] ARGB; bitmap wants BGRA bytes, but we can copy as ints on little-endian.
+            System.Runtime.InteropServices.Marshal.Copy(img.Rgba, 0, bd.Scan0, img.Rgba.Length);
+        }
+        finally { bmp.UnlockBits(bd); }
+        return bmp;
+    }
     // -------------------------------------------------
     // Encode options (header fields)
     // -------------------------------------------------
+
+    public enum V56ViewHeaderVariant
+    {
+        // Variant A: viewHeaderSize=0x12 (18 bytes after size field) and includes trailing u16 (usually 0x0084)
+        A_0x12_With0084 = 0,
+
+        // Variant B: viewHeaderSize=0x10 (16 bytes after size field) and omits trailing u16
+        B_0x10_No0084 = 1,
+    }
+
     public sealed class V56EncodeOptions
     {
+        public V56ViewHeaderVariant HeaderVariant = V56ViewHeaderVariant.A_0x12_With0084;
+
         // These match the 18-byte header fields seen in your sample.
-        public ushort HeaderFlagsA = 0x0001; // in your good file sometimes 0x0101
-        public ushort HeaderFlagsB = 0x0001;
+        public ushort HeaderFlagsA = 0xFF01; // in your good file sometimes 0x0101
+        public ushort HeaderFlagsB = 0x0030;
         public ushort Magic3410 = 0x3410;
         public ushort ResX = 0x0280;
         public ushort ResY = 0x01E0;
         public ushort Magic0084 = 0x0084;
+    }
+    public static List<V56Cel> Decode(byte[] fileData, out V56ViewHeaderVariant headerVariant)
+    {
+        if (fileData == null) throw new ArgumentNullException("fileData");
+        if (fileData.Length < 26 + 2) throw new InvalidDataException("File too small.");
+
+        int stampLen = 26;
+        int bodyBase = stampLen; // offsets inside file are ABS from start-of-body
+        int p = bodyBase;
+
+        // --- View header ---
+        ushort viewHeaderSize = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+
+        if (viewHeaderSize == 0x0012) headerVariant = V56ViewHeaderVariant.A_0x12_With0084;
+        else if (viewHeaderSize == 0x0010) headerVariant = V56ViewHeaderVariant.B_0x10_No0084;
+        else throw new InvalidDataException("Unsupported viewHeaderSize: 0x" + viewHeaderSize.ToString("X"));
+
+        int viewHeaderTotalLen = 2 + viewHeaderSize;
+
+        ushort loopCountU16 = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+        int loopCount = loopCountU16;
+
+        // flags (kept for completeness; not used)
+        ushort flagsA = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+        ushort flagsB = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+
+        uint palettePayloadOffsetAbs = (uint)(fileData[p] | (fileData[p + 1] << 8) | (fileData[p + 2] << 16) | (fileData[p + 3] << 24)); p += 4;
+
+        ushort sizesWord = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+        int loopHeaderSize = (sizesWord & 0x00FF);
+        int celHeaderSize = (sizesWord >> 8) & 0x00FF;
+
+        ushort resX = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+        ushort resY = (ushort)(fileData[p] | (fileData[p + 1] << 8)); p += 2;
+
+        if (headerVariant == V56ViewHeaderVariant.A_0x12_With0084)
+        {
+            // trailing u16 (often 0x0084)
+            p += 2;
+        }
+
+        if (loopHeaderSize != LOOP_HEADER_SIZE) throw new InvalidDataException("Unsupported loopHeaderSize: " + loopHeaderSize);
+        if (celHeaderSize != 0x24 && celHeaderSize != CEL_HEADER_SIZE) throw new InvalidDataException("Unsupported celHeaderSize: 0x" + celHeaderSize.ToString("X"));
+
+        int loopHeadersStart = bodyBase + viewHeaderTotalLen;
+        int loopHeadersLen = loopCount * LOOP_HEADER_SIZE;
+        int celHeadersStart = loopHeadersStart + loopHeadersLen;
+
+        if (celHeadersStart > fileData.Length) throw new InvalidDataException("Header overruns file.");
+
+        // --- Read loop headers ---
+        byte[] loopNumCels = new byte[loopCount];
+        int[] loopCelTableOffsetAbs = new int[loopCount];
+        bool[] loopIsMirror = new bool[loopCount];
+        int[] loopMirrorOf = new int[loopCount];
+
+        int totalCels = 0;
+        for (int li = 0; li < loopCount; li++)
+        {
+            int o = loopHeadersStart + (li * LOOP_HEADER_SIZE);
+
+            int b0 = fileData[o + 0x00] & 0xFF;
+            int b1 = fileData[o + 0x01] & 0xFF;
+            int b2 = fileData[o + 0x02] & 0xFF;
+
+            bool isMirror = (b1 == 0x01) && (b2 == 0x00) && (b0 != 0xFF);
+            loopIsMirror[li] = isMirror;
+
+            if (isMirror)
+            {
+                loopMirrorOf[li] = b0;
+                loopNumCels[li] = 0;
+                loopCelTableOffsetAbs[li] = 0;
+            }
+            else
+            {
+                loopMirrorOf[li] = -1;
+                loopNumCels[li] = (byte)b2;
+                int off = o + 0x0C;
+                int celOffAbs = fileData[off] | (fileData[off + 1] << 8) | (fileData[off + 2] << 16) | (fileData[off + 3] << 24);
+                loopCelTableOffsetAbs[li] = celOffAbs;
+                totalCels += loopNumCels[li];
+            }
+        }
+
+        // --- Read cel headers ---
+        int celHeadersBytes = totalCels * celHeaderSize;
+        int afterCelHeaders = celHeadersStart + celHeadersBytes;
+        if (afterCelHeaders > fileData.Length) throw new InvalidDataException("Cel headers overrun file.");
+
+        // --- Read palette chunk (0x0300) ---
+        int chunkP = afterCelHeaders;
+        ushort palTag = (ushort)(fileData[chunkP] | (fileData[chunkP + 1] << 8));
+        if (palTag != 0x0300) throw new InvalidDataException("Expected 0x0300 palette tag.");
+        uint palLen = (uint)(fileData[chunkP + 2] | (fileData[chunkP + 3] << 8) | (fileData[chunkP + 4] << 16) | (fileData[chunkP + 5] << 24));
+        int palPayloadStart = chunkP + 6;
+        int palPayloadEnd = palPayloadStart + (int)palLen;
+        if (palPayloadEnd > fileData.Length) throw new InvalidDataException("Palette payload out of range.");
+
+        // Palette payload: 37-byte header + 256*4 entries [flag,R,G,B]
+        if (palLen < 37 + 256 * 4) throw new InvalidDataException("Palette payload too small.");
+        int palEntriesStart = palPayloadStart + 37;
+
+        int[] palArgb = new int[256];
+        for (int i = 0; i < 256; i++)
+        {
+            int o = palEntriesStart + (i * 4);
+            // byte flag = fileData[o+0]; // flag is meaningful to SV, but for rendering we use RGB
+            int r = fileData[o + 1] & 0xFF;
+            int g = fileData[o + 2] & 0xFF;
+            int b = fileData[o + 3] & 0xFF;
+            palArgb[i] = unchecked((int)0xFF000000u | (r << 16) | (g << 8) | b);
+        }
+
+        // --- Read 0x0400 image chunk header ---
+        chunkP = palPayloadEnd;
+        ushort imgTag = (ushort)(fileData[chunkP] | (fileData[chunkP + 1] << 8));
+        if (imgTag != 0x0400) throw new InvalidDataException("Expected 0x0400 image tag.");
+        uint imgLen = (uint)(fileData[chunkP + 2] | (fileData[chunkP + 3] << 8) | (fileData[chunkP + 4] << 16) | (fileData[chunkP + 5] << 24));
+        int imgPayloadStart = chunkP + 6;
+        int imgPayloadEnd = imgPayloadStart + (int)imgLen;
+        if (imgPayloadEnd > fileData.Length) throw new InvalidDataException("Image payload out of range.");
+
+        // --- Next is 0x0500 header (len=0), then rowTables blob until 0x0600 ---
+        int tag0500 = imgPayloadEnd;
+        ushort tag = (ushort)(fileData[tag0500] | (fileData[tag0500 + 1] << 8));
+        if (tag != 0x0500) throw new InvalidDataException("Expected 0x0500 tag.");
+        uint len0500 = (uint)(fileData[tag0500 + 2] | (fileData[tag0500 + 3] << 8) | (fileData[tag0500 + 4] << 16) | (fileData[tag0500 + 5] << 24));
+        if (len0500 != 0u) throw new InvalidDataException("Expected 0x0500 length 0.");
+        int rowTablesStartAbs = (tag0500 + 6) - bodyBase; // ABS-from-body for cel headers (so we can compare)
+        int rowTablesStart = tag0500 + 6;
+
+        // find 0x0600 header
+        int tag0600 = -1;
+        for (int scan = rowTablesStart; scan + 6 <= fileData.Length; scan++)
+        {
+            if ((fileData[scan] | (fileData[scan + 1] << 8)) == 0x0600)
+            {
+                tag0600 = scan;
+                break;
+            }
+        }
+        if (tag0600 < 0) throw new InvalidDataException("Missing 0x0600 terminator.");
+        int rowTablesEnd = tag0600; // exclusive
+
+        // --- Determine celCount in "List<V56Cel>" sense ---
+        int celCount = 0;
+        for (int li = 0; li < loopCount; li++)
+        {
+            if (!loopIsMirror[li] && loopNumCels[li] > celCount) celCount = loopNumCels[li];
+        }
+        if (celCount <= 0) throw new InvalidDataException("No cels found.");
+
+        List<V56Cel> outCels = new List<V56Cel>();
+        for (int ci = 0; ci < celCount; ci++) outCels.Add(new V56Cel());
+
+        // --- Walk loops and decode each cel's image ---
+        for (int li = 0; li < loopCount; li++)
+        {
+            if (loopIsMirror[li])
+            {
+                for (int ci = 0; ci < celCount; ci++)
+                    outCels[ci].Loops.Add(new V56MirrorLoop(loopMirrorOf[li]));
+                continue;
+            }
+
+            int loopNum = loopNumCels[li];
+            int celTableAbs = loopCelTableOffsetAbs[li];
+            int celTablePos = bodyBase + celTableAbs;
+
+            // celTableAbs points to the FIRST cel header for this loop
+            for (int ci = 0; ci < loopNum; ci++)
+            {
+                int chPos = celTablePos + (ci * celHeaderSize);
+                if (chPos + 0x24 > fileData.Length) throw new InvalidDataException("Cel header out of range.");
+
+                int w = fileData[chPos + 0x00] | (fileData[chPos + 0x01] << 8);
+                int h = fileData[chPos + 0x02] | (fileData[chPos + 0x03] << 8);
+                short xHot = unchecked((short)(fileData[chPos + 0x04] | (fileData[chPos + 0x05] << 8)));
+                short yHot = unchecked((short)(fileData[chPos + 0x06] | (fileData[chPos + 0x07] << 8)));
+                byte transparentIndex = fileData[chPos + 0x08];
+
+                // CelBase-ish counts (we write these now)
+                int dataByteCount = fileData[chPos + 0x0C] | (fileData[chPos + 0x0D] << 8) | (fileData[chPos + 0x0E] << 16) | (fileData[chPos + 0x0F] << 24);
+                int controlByteCount = fileData[chPos + 0x10] | (fileData[chPos + 0x11] << 8) | (fileData[chPos + 0x12] << 16) | (fileData[chPos + 0x13] << 24);
+
+                int controlOffAbs = fileData[chPos + 0x18] | (fileData[chPos + 0x19] << 8) | (fileData[chPos + 0x1A] << 16) | (fileData[chPos + 0x1B] << 24);
+                int dataOffAbs = fileData[chPos + 0x1C] | (fileData[chPos + 0x1D] << 8) | (fileData[chPos + 0x1E] << 16) | (fileData[chPos + 0x1F] << 24);
+                int rowOffAbs = fileData[chPos + 0x20] | (fileData[chPos + 0x21] << 8) | (fileData[chPos + 0x22] << 16) | (fileData[chPos + 0x23] << 24);
+
+                int controlBase = bodyBase + controlOffAbs;
+                int dataBase = bodyBase + dataOffAbs;
+                int rowBase = bodyBase + rowOffAbs;
+
+                if (controlBase < 0 || controlBase > fileData.Length) throw new InvalidDataException("ControlOffset out of range.");
+                if (dataBase < 0 || dataBase > fileData.Length) throw new InvalidDataException("ColorOffset out of range.");
+                if (rowBase < 0 || rowBase > fileData.Length) throw new InvalidDataException("RowTableOffset out of range.");
+
+                // Validate control/data byte count if present
+                if (controlByteCount < 0) throw new InvalidDataException("Invalid controlByteCount.");
+                if (dataByteCount < 0) throw new InvalidDataException("Invalid dataByteCount.");
+
+                // row tables: u32[h] tagOff + u32[h] dataOff (relative to cel stream bases)
+                int tagsPos = rowBase;
+                int colsPos = rowBase + (h * 4);
+                int tableBytes = h * 8;
+                if (rowBase + tableBytes > fileData.Length) throw new InvalidDataException("Row tables overrun file.");
+
+                byte[] outIdx = new byte[w * h];
+
+                for (int y = 0; y < h; y++)
+                {
+                    int tagRel = fileData[tagsPos + y * 4] | (fileData[tagsPos + y * 4 + 1] << 8) | (fileData[tagsPos + y * 4 + 2] << 16) | (fileData[tagsPos + y * 4 + 3] << 24);
+                    int colRel = fileData[colsPos + y * 4] | (fileData[colsPos + y * 4 + 1] << 8) | (fileData[colsPos + y * 4 + 2] << 16) | (fileData[colsPos + y * 4 + 3] << 24);
+
+                    int cp = controlBase + tagRel;
+                    int dp = dataBase + colRel;
+
+                    int x = 0;
+                    int rowStart = y * w;
+
+                    while (x < w)
+                    {
+                        if (cp < 0 || cp >= fileData.Length) throw new InvalidDataException("Control stream out of range.");
+                        int cb = fileData[cp++] & 0xFF;
+
+                        if (cb < 0x80)
+                        {
+                            int n = cb;
+                            if (n == 0) throw new InvalidDataException("Zero-length literal.");
+                            if (dp < 0 || dp + n > fileData.Length) throw new InvalidDataException("Color stream out of range.");
+
+                            for (int k = 0; k < n; k++)
+                            {
+                                if (x >= w) break;
+                                outIdx[rowStart + x] = fileData[dp++];
+                                x++;
+                            }
+                        }
+                        else if (cb < 0xC0)
+                        {
+                            int n = cb - 0x80;
+                            if (n <= 0) throw new InvalidDataException("Zero-length run.");
+                            if (dp < 0 || dp >= fileData.Length) throw new InvalidDataException("Color stream out of range.");
+                            byte v = fileData[dp++];
+
+                            for (int k = 0; k < n; k++)
+                            {
+                                if (x >= w) break;
+                                outIdx[rowStart + x] = v;
+                                x++;
+                            }
+                        }
+                        else
+                        {
+                            int n = cb - 0xC0;
+                            if (n <= 0) throw new InvalidDataException("Zero-length transparent run.");
+                            for (int k = 0; k < n; k++)
+                            {
+                                if (x >= w) break;
+                                outIdx[rowStart + x] = transparentIndex;
+                                x++;
+                            }
+                        }
+                    }
+                }
+
+                // Build a 32bpp ARGB bitmap so we can reuse the existing V56ImageLoop(Bitmap,...) ctor
+                Bitmap bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var rect = new Rectangle(0, 0, w, h);
+                var bd = bmp.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly, bmp.PixelFormat);
+                try
+                {
+                    int stride = bd.Stride;
+                    byte[] row = new byte[stride];
+
+                    for (int y = 0; y < h; y++)
+                    {
+                        int rowStart = y * w;
+                        int rp = 0;
+
+                        for (int x = 0; x < w; x++)
+                        {
+                            byte ix = outIdx[rowStart + x];
+                            if (ix == transparentIndex)
+                            {
+                                row[rp++] = 0; // B
+                                row[rp++] = 0; // G
+                                row[rp++] = 0; // R
+                                row[rp++] = 0; // A
+                            }
+                            else
+                            {
+                                int argb = palArgb[ix];
+                                row[rp++] = (byte)(argb & 0xFF);         // B
+                                row[rp++] = (byte)((argb >> 8) & 0xFF);  // G
+                                row[rp++] = (byte)((argb >> 16) & 0xFF); // R
+                                row[rp++] = 0xFF;                        // A
+                            }
+                        }
+
+                        System.Runtime.InteropServices.Marshal.Copy(row, 0, new IntPtr(bd.Scan0.ToInt64() + (long)y * stride), stride);
+                    }
+                }
+                finally
+                {
+                    bmp.UnlockBits(bd);
+                }
+
+                V56ImageLoop img = new V56ImageLoop(bmp, xHot, yHot);
+                img.Indices = outIdx;
+                bmp.Dispose();
+
+                // Ensure the per-cel list has loopCount entries in order
+                // We add loops in loop order, so just append.
+                outCels[ci].Loops.Add(img);
+            }
+
+            // If some loops have fewer cels than celCount, pad the missing frames with mirrors to itself (safe)
+            for (int ci = loopNum; ci < celCount; ci++)
+            {
+                outCels[ci].Loops.Add(new V56MirrorLoop(li));
+            }
+        }
+
+        return outCels;
     }
 
     // fileStamp26 is optionally prepended LAST and is NOT included in any internal offsets.
@@ -131,7 +501,7 @@ public static class V56Encoder
         StreamsAggregate streams = BuildStreams(nv, pal.TransparentIndex);
 
         // Build loop headers + cel headers
-        HeaderPack headers = BuildHeaders(nv, pal.TransparentIndex);
+        HeaderPack headers = BuildHeaders(nv, pal.TransparentIndex, opt);
 
         // Build palette chunk
         byte[] palChunk = BuildCompPalChunk(pal.CompPalPayload);
@@ -442,29 +812,34 @@ public static class V56Encoder
     // Matches your reader's ParseCompPalPayload palType==1 path (RGB triples at offset 37).
     private static byte[] BuildCompPalPayload_RGBTriples(Color[] pal256)
     {
-        byte[] payload = new byte[37 + 256 * 3];
+        // Stock/FotSCIhop compal: 37-byte header + 256 * 4 bytes (flag,R,G,B)
+        byte[] payload = new byte[37 + 256 * 4];
 
-        // Header constants (matches real V56 compal header like 0.v56)
+        // Header constants (keep exactly as you already had)
         payload[0] = 0x0E;
         for (int i = 1; i <= 9; i++) payload[i] = 0x20; // spaces
         payload[10] = 0x01;
-        payload[13] = 0x66;
-        payload[14] = 0x01;
+        payload[13] = 0x16;//0x66;
+        payload[14] = 0x04;//0x01;
 
-        payload[25] = 0;          // startOffset
-        payload[29] = 0;          // nColors = 256 (little-endian)
+        payload[25] = 0; // startOffset
+
+        // nColors = 256 (little-endian) in your existing header layout
+        payload[29] = 0;
         payload[30] = 1;
-        payload[31] = 0x01;       // seen in real file
-        payload[32] = 1;          // palType=1 (RGB triples)
-
-        int p = 37;
+        payload[31] = 1;
+        // Entries start at 37: [flag,R,G,B] * 256
+        int o = 37;
         for (int i = 0; i < 256; i++)
         {
             Color c = pal256[i];
-            payload[p++] = c.R;
-            payload[p++] = c.G;
-            payload[p++] = c.B;
+            payload[o + 0] = 1;    // flag
+            payload[o + 1] = c.R;
+            payload[o + 2] = c.G;
+            payload[o + 3] = c.B;
+            o += 4;
         }
+
         return payload;
     }
 
@@ -524,13 +899,16 @@ public static class V56Encoder
         int h = img.Height;
         byte[] idx = img.Indices;
 
+        // IMPORTANT:
+        // FotoSCIhop LINES table values are offsets RELATIVE to the start of this cel’s
+        // control stream (cp) and pack/data stream (dp), not absolute file offsets.
         uint[] rowControl = new uint[h];
         uint[] rowData = new uint[h];
 
         for (int y = 0; y < h; y++)
         {
-            rowControl[y] = (uint)controlAll.Count;
-            rowData[y] = (uint)dataAll.Count;
+            rowControl[y] = (uint)(controlAll.Count - controlStart);
+            rowData[y] = (uint)(dataAll.Count - dataStart);
             EncodeRow(idx, w, y, transparentIndex, controlAll, dataAll);
         }
 
@@ -543,48 +921,63 @@ public static class V56Encoder
         s.DataStart = dataStart;
         return s;
     }
-
-    private static void EncodeRow(byte[] idx, int w, int y, byte transparentIndex, List<byte> control, List<byte> data)
+    private static void EncodeRow(byte[] idx, int w, int y, byte transparentIndex, List<byte> controlAll, List<byte> dataAll)
     {
-        int rowBase = y * w;
+        int rowStart = y * w;
         int x = 0;
 
         while (x < w)
         {
-            byte v = idx[rowBase + x];
+            byte v = idx[rowStart + x];
 
+            // Transparent run
             if (v == transparentIndex)
             {
-                int run = 1;
-                while (x + run < w && run < 63 && idx[rowBase + x + run] == transparentIndex) run++;
-                control.Add((byte)(0xC0 | (run & 0x3F)));
+                int n = 1;
+                while (x + n < w && n < 0x3F && idx[rowStart + x + n] == transparentIndex) n++;
+                controlAll.Add((byte)(0xC0 + n));
+                x += n;
+                continue;
+            }
+
+            // Solid-color run (only worth it if >= 3; matches common heuristics and avoids bloating)
+            int run = 1;
+            while (x + run < w && run < 0x3F && idx[rowStart + x + run] == v) run++;
+
+            if (run >= 3)
+            {
+                controlAll.Add((byte)(0x80 + run));
+                dataAll.Add(v);
                 x += run;
                 continue;
             }
 
-            int solid = 1;
-            while (x + solid < w && solid < 63 && idx[rowBase + x + solid] == v) solid++;
-            if (solid >= 2)
-            {
-                control.Add((byte)(0x80 | (solid & 0x3F)));
-                data.Add(v);
-                x += solid;
-                continue;
-            }
-
+            // Literal block (max 0x3F). Stop early if we see an upcoming compressible run.
             int litStart = x;
             int litLen = 1;
-            while (litStart + litLen < w && litLen < 63)
+
+            while (litStart + litLen < w && litLen < 0x3F)
             {
-                byte nv2 = idx[rowBase + litStart + litLen];
-                if (nv2 == transparentIndex) break;
-                if (litStart + litLen + 1 < w && idx[rowBase + litStart + litLen + 1] == nv2) break;
+                byte c = idx[rowStart + litStart + litLen];
+
+                // stop before transparent
+                if (c == transparentIndex) break;
+
+                // stop before a solid run >= 3
+                if (litStart + litLen + 2 < w)
+                {
+                    byte c1 = idx[rowStart + litStart + litLen];
+                    byte c2 = idx[rowStart + litStart + litLen + 1];
+                    byte c3 = idx[rowStart + litStart + litLen + 2];
+                    if (c1 == c2 && c2 == c3) break;
+                }
+
                 litLen++;
             }
 
-            control.Add((byte)litLen);
+            controlAll.Add((byte)litLen);
             for (int i = 0; i < litLen; i++)
-                data.Add(idx[rowBase + litStart + i]);
+                dataAll.Add(idx[rowStart + litStart + i]);
 
             x += litLen;
         }
@@ -606,10 +999,10 @@ public static class V56Encoder
         public byte[] CelHeaders;
         public int[] LoopFirstCelHeaderIndex;
 
-        public int ViewHeaderTotalLen; // 2 + VIEW_HEADER_SIZE
+        public int ViewHeaderTotalLen; // 2 + VIEW_HEADER_SIZE_A
     }
 
-    private static HeaderPack BuildHeaders(NormalizedView nv, byte transparentIndex)
+    private static HeaderPack BuildHeaders(NormalizedView nv, byte transparentIndex, V56EncodeOptions opt)
     {
         byte[] loopHeaders = new byte[nv.LoopCount * LOOP_HEADER_SIZE];
 
@@ -650,15 +1043,16 @@ public static class V56Encoder
         hp.LoopHeaders = loopHeaders;
         hp.CelHeaders = celHeaders;
         hp.LoopFirstCelHeaderIndex = loopFirst;
-        hp.ViewHeaderTotalLen = 2 + VIEW_HEADER_SIZE;
+        hp.ViewHeaderTotalLen = 2 + GetViewHeaderSize(opt);
         return hp;
     }
 
-    // This writes the real header prefix: u16 size + 18 bytes header
+    // This writes the view header: u16 viewHeaderSize + that many bytes
     private static byte[] BuildViewHeader(V56EncodeOptions opt, ushort loopCount, uint palettePayloadOffset)
     {
-        byte[] b = new byte[2 + VIEW_HEADER_SIZE];
-        WriteU16(b, 0x00, VIEW_HEADER_SIZE);     // size (18)
+        ushort vhs = GetViewHeaderSize(opt);
+        byte[] b = new byte[2 + vhs];
+        WriteU16(b, 0x00, vhs);     // viewHeaderSize (bytes after this u16 size field)
         WriteU16(b, 0x02, loopCount);            // loopCount
         WriteU16(b, 0x04, opt.HeaderFlagsA);     // unknown/flags
         WriteU16(b, 0x06, opt.HeaderFlagsB);     // unknown/flags
@@ -666,7 +1060,8 @@ public static class V56Encoder
         WriteU16(b, 0x0C, opt.Magic3410);        // 0x3410
         WriteU16(b, 0x0E, opt.ResX);             // 0x0280
         WriteU16(b, 0x10, opt.ResY);             // 0x01E0
-        WriteU16(b, 0x12, opt.Magic0084);        // 0x0084
+        if (vhs == VIEW_HEADER_SIZE_A)
+            WriteU16(b, 0x12, opt.Magic0084);        // trailing field (usually 0x0084)
         return b;
     }
 
@@ -795,8 +1190,6 @@ public static class V56Encoder
             WriteU32(headers.LoopHeaders, o + 0x0C, celTableAbs);
         }
     }
-
-
     private static void PatchCelHeaderOffsets(byte[] celHeaders, StreamsAggregate streams, Layout layout)
     {
         if (streams.Slices.Count * CEL_HEADER_SIZE != celHeaders.Length)
@@ -807,6 +1200,18 @@ public static class V56Encoder
             FrameSlice s = streams.Slices[i];
             int baseOff = i * CEL_HEADER_SIZE;
 
+            int nextControlStart = (i + 1 < streams.Slices.Count) ? streams.Slices[i + 1].ControlStart : streams.Control.Length;
+            int nextDataStart = (i + 1 < streams.Slices.Count) ? streams.Slices[i + 1].DataStart : streams.Data.Length;
+
+            int controlLen = nextControlStart - s.ControlStart;
+            int dataLen = nextDataStart - s.DataStart;
+
+            // FotoSCIhop-compatible counts (CelBase layout)
+            // dataByteCount = control + data(pack)
+            WriteU32(celHeaders, baseOff + 0x0C, (uint)(controlLen + dataLen));
+            WriteU32(celHeaders, baseOff + 0x10, (uint)controlLen);
+
+            // Absolute offsets (these you already do)
             uint controlAbs = layout.ImagePayloadOffset + (uint)s.ControlStart;
             uint rowAbs = layout.RowTableOffset + (uint)s.RowTableStart;
             uint dataAbs = layout.DataOffset + (uint)s.DataStart;
