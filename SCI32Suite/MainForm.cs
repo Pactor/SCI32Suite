@@ -417,11 +417,57 @@ namespace SCI32Suite
                 {
                     if (File.Exists(ofd.FileName))
                     {
+                        // want to write a dir structure to dump this
                         byte[] data = File.ReadAllBytes(ofd.FileName);
+
+                        FileInfo fi = new FileInfo(ofd.FileName);
+
+                        string bdir = fi.Name.Split('.').First();
+                        string baseDir = Path.Combine(Global.BaseDir, bdir);
+
+                        if(!Directory.Exists(baseDir))
+                            Directory.CreateDirectory(baseDir);
 
                         V56ViewHeaderVariant type;
                         List<V56Cel> cells = V56Encoder.Decode(data, out type);
 
+
+                        for (int i = 0; i < cells.Count; i++)
+                        {
+                            V56Cel cel = cells[i];
+                            string cellDir = Path.Combine(baseDir, string.Format("Cell{0}", i));
+                            if(!Directory.Exists(cellDir))
+                                Directory.CreateDirectory(cellDir);
+
+                            for(int j = 0; j < cells[i].Loops.Count; j++)
+                            {
+                                V56LoopDef loop = cells[i].Loops[j];
+                                string loopDir = Path.Combine(cellDir, string.Format("Loop{0}", j));
+                                if(!Directory.Exists(loopDir))
+                                    Directory.CreateDirectory(loopDir);
+
+                                string bmpFileName = Path.Combine(loopDir, string.Format("view_{0}_loop{1}.png", i, j));
+
+                                if(loop is V56ImageLoop)
+                                {
+                                    V56ImageLoop il = (V56ImageLoop)loop;
+
+
+                                    Bitmap bmp = V56Encoder.RgbaToBitmap(il);
+
+                                    bmp.Save(bmpFileName, ImageFormat.Png);
+                                }
+                                else
+                                {
+                                    V56MirrorLoop ml = (V56MirrorLoop)loop;
+                                    string mirrorName = string.Format("mirror_of_{0}.txt", ml.MirrorOf);
+
+                                    File.WriteAllText(Path.Combine(loopDir, mirrorName), ml.MirrorOf.ToString());
+                                    // mirror
+                                }
+                            }
+                        }
+                        /*
                         if (cells.Count > 0)
                         {
                             V56Cel first = cells[0];
@@ -441,6 +487,7 @@ namespace SCI32Suite
                                 }
                             }
                         }
+                        */
                     }
                 }
             }
