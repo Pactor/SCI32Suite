@@ -5,6 +5,7 @@ using SCI32Suite.V56;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -336,93 +337,65 @@ namespace SCI32Suite
 
         private void _btnCreateProject_Click(object sender, EventArgs e)
         {
-            using(var odd = new FolderBrowserDialog())
+            using (var odd = new FolderBrowserDialog())
             {
-                if (odd.ShowDialog() == DialogResult.OK)
+                if (odd.ShowDialog() != DialogResult.OK)
+                    return;
+
+                string dir = odd.SelectedPath;
+
+                string c0loop0 = Path.Combine(dir, "102-0-0.bmp");
+                string c0loop2 = Path.Combine(dir, "102-2-0.bmp");
+                string c0loop3 = Path.Combine(dir, "102-3-0.bmp");
+                string c0loop5 = Path.Combine(dir, "102-5-0.bmp");
+                string c0loop6 = Path.Combine(dir, "102-6-0.bmp");
+
+                Bitmap bit0 = null;
+                Bitmap bit2 = null;
+                Bitmap bit3 = null;
+                Bitmap bit5 = null;
+                Bitmap bit6 = null;
+
+                if (File.Exists(c0loop0)) bit0 = new Bitmap(c0loop0);
+                if (File.Exists(c0loop2)) bit2 = new Bitmap(c0loop2);
+                if (File.Exists(c0loop3)) bit3 = new Bitmap(c0loop3);
+                if (File.Exists(c0loop5)) bit5 = new Bitmap(c0loop5);
+                if (File.Exists(c0loop6)) bit6 = new Bitmap(c0loop6);
+
+                try
                 {
-                    // find our files
-                    // first cell
-                    string c0loop0 = Path.Combine(odd.SelectedPath, "102-0-0.bmp");
-                   // string c0loop1 = Path.Combine(odd.SelectedPath, "102-1-0.bmp"); // mirror of 0
-                    string c0loop2 = Path.Combine(odd.SelectedPath, "102-2-0.bmp");
-                    string c0loop3 = Path.Combine(odd.SelectedPath, "102-3-0.bmp");
-                   // string c0loop4 = Path.Combine(odd.SelectedPath, "102-4-0.bmp"); // mirror of 4
-                    string c0loop5 = Path.Combine(odd.SelectedPath, "102-5-0.bmp");
-                    string c0loop6 = Path.Combine(odd.SelectedPath, "102-6-0.bmp");
-                    string c0loop7 = Path.Combine(odd.SelectedPath, "102-7-0.bmp"); // mirror of 6
-
                     var cells = new List<V56Cel>();
-
                     var cell0 = new V56Cel();
 
-                    Bitmap bit1 = null;
-                    Bitmap bit3 = null;
-                    Bitmap bit4 = null;
-                    Bitmap bit6 = null;
-                    Bitmap bit7 = null;
+                    cell0.AddImageLoop(bit0);   // loop 0 image
+                    cell0.AddMirrorLoop(0);     // loop 1 mirror of 0
+                    cell0.AddImageLoop(bit2);   // loop 2 image
+                    cell0.AddImageLoop(bit3);   // loop 3 image
+                    cell0.AddMirrorLoop(3);     // loop 4 mirror of 3
+                    cell0.AddImageLoop(bit5);   // loop 5 image
+                    cell0.AddImageLoop(bit6);   // loop 6 image
+                    cell0.AddMirrorLoop(6);     // loop 7 mirror of 6
 
-                    if(File.Exists(c0loop0)) 
-                        bit1 = new Bitmap(c0loop0);
-                    if(File.Exists(c0loop2))
-                        bit3 = new Bitmap(c0loop2);
-                    if(File.Exists(c0loop3))
-                        bit4 = new Bitmap(c0loop3);
-                    if(File.Exists(c0loop5)) 
-                        bit6 = new Bitmap(c0loop5);
-                    if(File.Exists(c0loop6))
-                        bit7 = new Bitmap(c0loop6);
-
-                    cell0.AddImageLoop(bit1);
-                    cell0.AddMirrorLoop(0);
-                    cell0.AddImageLoop(bit3);
-                    cell0.AddImageLoop(bit4);
-                    cell0.AddMirrorLoop(3);
-                    cell0.AddImageLoop(bit6);
-                    cell0.AddImageLoop(bit7);
-                    cell0.AddMirrorLoop(6);
                     cells.Add(cell0);
-                    byte[] fileData = V56Encoder.Encode(cells, GetViewStamp26());
 
+                    // NEW: choose header variant (defaults to A if you omit this)
+                    var opt = new V56Encoder.V56EncodeOptions();
+
+                    // opt.HeaderVariant = V56Encoder.V56ViewHeaderVariant.A_0x12_With0084; // default
+                     opt.HeaderVariant = V56Encoder.V56ViewHeaderVariant.B_0x10_No0084;   // switch to B
+
+                    byte[] fileData = V56Encoder.Encode(cells, GetViewStamp26(), opt);
                     File.WriteAllBytes(Path.Combine(Global.BaseDir, "22.v56"), fileData);
                 }
-            }
-            /*
-
-            // get bmps
-            using(var ofd = new OpenFileDialog())
-            {
-                ofd.Filter = "PNG|*.png";
-
-                if(ofd.ShowDialog() == DialogResult.OK)
+                finally
                 {
-                    Bitmap img = new Bitmap(ofd.FileName);
-                    _viewPictureBox.Image = img;
-
-                    //  var cells = new List<V56Encoder.V56Cel>();
-                    var cells = new List<V56Cel>();
-                    V56Cel cel0 = new V56Cel();
-                    cel0.AddImageLoop(img);
-                    cel0.AddImageLoop(img);
-                    cel0.AddMirrorLoop(0);
-                    cells.Add(cel0);
-                    cells.Add(cel0);
-                    cells.Add(cel0 );
-                    cells.Add(cel0);
-                    cells.Add(cel0);
-                    cells.Add(cel0);
-                    byte[] fileData = V56Encoder.Encode(cells, GetViewStamp26());
-
-                    File.WriteAllBytes(Path.Combine(Global.BaseDir, "22.v56"), fileData);
-
-                 //   var cell = new V56Encoder.V56Cel();
-                 //   cell.AddImageLoop(img);
-                 //   cell.AddMirrorLoop(0);
-                 //   cells.Add(cell);
-                 //   byte[] v56 = V56Encoder.Encode(cells, 0, 0);
-                  //  File.WriteAllBytes(Path.Combine(Global.BaseDir, "21.v56"), v56);
+                    if (bit0 != null) bit0.Dispose();
+                    if (bit2 != null) bit2.Dispose();
+                    if (bit3 != null) bit3.Dispose();
+                    if (bit5 != null) bit5.Dispose();
+                    if (bit6 != null) bit6.Dispose();
                 }
             }
-            */
         }
         private static byte[] GetViewStamp26()
         {
@@ -432,43 +405,46 @@ namespace SCI32Suite
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
             };
         }
+    
         private void _btnLoadProject_Click(object sender, EventArgs e)
         {
+            
             // load a v56 for now
             using (var ofd = new OpenFileDialog())
             {
                 ofd.Filter = "V56 View (*.v56)|*.v56|All Files (*.*)|*.*";
                 if (ofd.ShowDialog(this) == DialogResult.OK)
-                { 
-                   V56ViewR file = V56ReaderR.Load(ofd.FileName);
+                {
+                    if (File.Exists(ofd.FileName))
+                    {
+                        byte[] data = File.ReadAllBytes(ofd.FileName);
 
+                        V56ViewHeaderVariant type;
+                        List<V56Cel> cells = V56Encoder.Decode(data, out type);
 
+                        if (cells.Count > 0)
+                        {
+                            V56Cel first = cells[0];
 
-                    // if(file.LoopCount > 4)
-                    // {
-                    int loopIndex = 0;
-                    int celIndex = 0;
+                            if(first.Loops.Count > 0)
+                            {
+                                V56LoopDef loop = first.Loops[0];
 
-                    V56LoopR loop = file.Loops[loopIndex];
-                    bool mirror = loop.IsMirror;
+                                if(loop is V56ImageLoop)
+                                {
+                                    V56ImageLoop iloop = loop as V56ImageLoop;
 
-                    V56LoopR src = mirror ? file.Loops[loop.MirrorOf] : loop;
-                    V56CelR cel = src.Cels[celIndex];
-
-                    V56Rect rect = cel.GetRect(mirror);
-
-                    byte[] pic = cel.ToPngBytes(file.Palette, mirror);
-                    string info = string.Format("{0} has {1} cels and {2} loops. Rect:{3}",
-                       file.FileName,
-                       file.TotalCelCount,
-                       file.LoopCount,
-                       rect);
-                    MessageBox.Show(info);
-                    using (MemoryStream ms = new MemoryStream(pic))
-                            _viewPictureBox.Image = Image.FromStream(ms);   
-                   // }
+                                    Bitmap bm = V56Encoder.RgbaToBitmap(iloop);
+                                    
+                                    if(bm != null)
+                                        _viewPictureBox.Image = bm;
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            
         }
 
         private TabPage CreatePaletteTab()
